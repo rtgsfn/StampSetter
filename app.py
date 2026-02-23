@@ -4,6 +4,7 @@ from io import BytesIO
 from PIL import Image
 import zipfile
 import os
+import gc
 
 
 def hex_to_rgb(hex_color):
@@ -183,33 +184,18 @@ def genera_anteprima(file_bytes, stamp_bytes):
 
 # 1. Input File
 st.subheader("📁 1. Caricamento")
-modalita = st.radio("Modalità:", ["Manuale", "Cartella Locale"], horizontal=True, label_visibility="collapsed")
-input_files = []
-
-if modalita == "Manuale":
-    files = st.file_uploader("Trascina PDF qui", type=["pdf"], accept_multiple_files=True)
-    if files:
-        for f in files: input_files.append({"name": f.name, "content": f.read()})
-else:
-    path = st.text_input("Percorso cartella:")
-    if path and os.path.isdir(path):
-        pdfs = [f for f in os.listdir(path) if f.lower().endswith(".pdf")]
-        if pdfs:
-            st.success(f"Caricati {len(pdfs)} PDF.")
-            for f_name in pdfs:
-                with open(os.path.join(path, f_name), "rb") as f:
-                    input_files.append({"name": f_name, "content": f.read()})
+files = st.file_uploader("Trascina i tuoi PDF qui", type=["pdf"], accept_multiple_files=True)
 
 # 2. Anteprima (Se ci sono file)
-if input_files:
+if files:
     st.divider()
     st.subheader("👁️ Anteprima (Ultima pagina del primo file)")
 
     stamp_bin = elabora_timbro_bianco(stamp_file) if stamp_file else None
 
-    # Genera anteprima live
+    # Genera anteprima live leggendo solo il primo file al volo
     try:
-        preview_img = genera_anteprima(input_files[0]["content"], stamp_bin)
+        preview_img = genera_anteprima(files[0].getvalue(), stamp_bin)
         st.image(preview_img, caption="Risultato atteso", use_container_width=True)
         st.caption("Nota: L'anteprima mostra dove finiranno Timbro e Testo. Usa i controlli a sinistra per spostarli.")
     except Exception as e:
@@ -217,14 +203,16 @@ if input_files:
 
 # 3. Elaborazione
 st.divider()
-if input_files and (stamp_file or testo_progetto.strip()):
+if files and (stamp_file or testo_progetto.strip()):
     if st.button("🚀 APPLICA A TUTTI I DOCUMENTI", type="primary"):
         stamp_bin = elabora_timbro_bianco(stamp_file) if stamp_file else None
         results = []
         bar = st.progress(0)
 
-        for i, file_data in enumerate(input_files):
-            doc = fitz.open(stream=file_data["content"], filetype="pdf")
+        for i, f in enumerate(files):
+            # Legge il file in memoria SOLO in questo momento
+            file_bytes = f.getvalue()
+            doc = fitz.open(stream=file_bytes, filetype="pdf")
             modified = False
 
             # --- LOOP PAGINE ---
@@ -242,13 +230,9 @@ if input_files and (stamp_file or testo_progetto.strip()):
                             applied_on_page = True
 
                     # Caso B: Posizione Fissa (Solo ultima pagina se keyword fallisce o non richiesta)
-                    # Logica: Se keyword era richiesta ma non trovata su ultima pagina -> metti fisso
-                    # Oppure se keyword non richiesta -> metti fisso su ultima pagina
                     is_last_page = (page_num == len(doc) - 1)
 
                     if is_last_page and not applied_on_page:
-                        # Se doveva cercare parola ma non l'ha trovata in tutto il doc, o se è modalità fissa
-                        # Qui semplifichiamo: se siamo all'ultima pagina e non abbiamo ancora timbrato QUESTA pagina tramite parola
                         r = get_rect_absolute(page.rect, st.session_state.pos_choice, dim_timbro, offset_x, offset_y)
                         page.insert_image(r, stream=stamp_bin)
                         modified = True
@@ -256,7 +240,6 @@ if input_files and (stamp_file or testo_progetto.strip()):
             # TESTO (Solo ultima pagina)
             if testo_progetto.strip():
                 page = doc[-1]
-                # Usa la stessa logica "infallibile" dell'anteprima
                 text_y0 = page.rect.height - margine_testo - 40
                 tr = fitz.Rect(50, text_y0, page.rect.width - 50, page.rect.height - margine_testo + 10)
                 page.insert_textbox(
@@ -268,10 +251,15 @@ if input_files and (stamp_file or testo_progetto.strip()):
             if modified:
                 out = BytesIO()
                 doc.save(out)
-                results.append((file_data["name"], out.getvalue()))
+                results.append((f.name, out.getvalue()))
 
+            # --- PULIZIA RAM (Fondamentale per il SaaS) ---
             doc.close()
-            bar.progress((i + 1) / len(input_files))
+            del doc
+            del file_bytes
+            gc.collect()  # Forza lo svuotamento della memoria per questo ciclo
+
+            bar.progress((i + 1) / len(files))
 
         # DOWNLOAD
         if len(results) == 1:
@@ -286,5 +274,5 @@ if input_files and (stamp_file or testo_progetto.strip()):
             st.warning("Nessuna modifica applicata.")
 
 else:
-    if input_files:
+    if files:
         st.info("👈 Configura Timbro o Testo nella barra laterale per iniziare.")
