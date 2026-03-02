@@ -68,7 +68,7 @@ with st.sidebar:
     st.divider()
     st.header("📝 2. Configurazione Testo")
     testo_progetto = st.text_area("Testo in calce:",
-                                  value="Investimento a valere sul Progetto AGRITECH CN22, CUP n. B13D21011560004")
+                                  value="")
     colore_testo = st.color_picker("Colore testo", "#000000")
     margine_testo = st.slider("Distanza dal fondo (px):", 10, 200, 50, help="Aumenta per alzare il testo")
 
